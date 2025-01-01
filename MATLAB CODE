@@ -1,0 +1,375 @@
+classdef Saidthat < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        UIFigure                  matlab.ui.Figure
+        Label2                    matlab.ui.control.Label
+        RPMLabel                  matlab.ui.control.Label
+        BPMLabel                  matlab.ui.control.Label
+        LableLabel                matlab.ui.control.Label
+        EditOrderEditField        matlab.ui.control.NumericEditField
+        EditOrderEditFieldLabel   matlab.ui.control.Label
+        LowpassfcEditField        matlab.ui.control.NumericEditField
+        LowpassfcEditFieldLabel   matlab.ui.control.Label
+        HighpassfcEditField       matlab.ui.control.NumericEditField
+        HighpassfcEditFieldLabel  matlab.ui.control.Label
+        StopButton                matlab.ui.control.Button
+        StartButton               matlab.ui.control.Button
+        UIAxes_4                  matlab.ui.control.UIAxes
+        UIAxes_3                  matlab.ui.control.UIAxes
+        UIAxes_2                  matlab.ui.control.UIAxes
+        UIAxes                    matlab.ui.control.UIAxes
+    end
+
+
+     properties (Access = private)
+        a 
+        f
+        f1
+        Y
+        Y1
+        P1
+        P2
+        P3
+        P4
+        filteredPlot
+        rawPlot
+        serialport
+        Fs = 8000;
+        fs = 5000;
+        fc1 = 20;
+        fc2 = 300;
+        T = 1/5000;
+        n = 1;
+        m = 1;
+        m1 = 1;
+        plotWindow = 2000;
+        IsRunning = false;
+        Timer
+        Data
+        ffData
+        fdata 
+        coefficient_1
+        coefficient_2
+        fc3=30
+        bpm
+        coefficient_3
+        coefficient_4
+        orderOfFilter=4;
+        RateLabel
+        rpm
+        end
+
+    methods (Access = private)
+        
+        function timerCallback = func(app)
+            if ~app.IsRunning
+            stop(app.Timer);
+        end
+    end
+ end
+
+    % Callbacks that handle component events
+    methods (Access = private)
+
+        % Code that executes after component creation
+        function startupFcn(app)
+            app.IsRunning=true;
+            app.Timer=timer;
+            app.Timer.Period=0.01;
+            app.Timer.ExecutionMode='fixedRate';
+            app.Timer.TimerFcn=@(~,~)app.timerCallback;
+            start(app.Timer);
+
+            
+        end
+
+        % Button pushed function: StartButton
+        function StartButtonPushed(app, event)
+            app.IsRunning = true;
+            app.a =serialport("COM5", 19200);
+            configureTerminator(app.a, "CR/LF");
+            flush(app.a);
+            app.a.UserData = struct("Data", [], "Order", 1, "fData", [],"ffData",[]);
+            app.IsRunning = true;
+            
+            while app.a.UserData.Order < 100000
+                    app.Data = readline(app.a);
+                    app.a.UserData.Data(end+1) = str2double(app.Data);
+                    app.a.UserData.Order = app.a.UserData.Order + 1;
+                if mod(app.a.UserData.Order, 100) == 0
+                    configureCallback(app.a, "off");
+
+                    plot(app.UIAxes, app.a.UserData.Data(max(1,end-app.plotWindow+1):end))
+                      [app.coefficient_1, app.coefficient_2] = butter(4, app.fc3/(app.fs/2), 'high');
+        app.a.UserData.ffData = filter(app.coefficient_1, app.coefficient_2, app.a.UserData.Data(1:end));
+                    [app.coefficient_3, app.coefficient_4] = butter(app.orderOfFilter, [app.fc1/(app.fs/2), app.fc2/(app.fs/2)], 'bandpass');
+
+                    app.a.UserData.fData = filter(app.coefficient_3, app.coefficient_4, app.a.UserData.Data);
+                    
+                    plot(app.UIAxes_2, app.a.UserData.fData(max(1, end-app.plotWindow+1):end) * 3);
+                    drawnow;
+                    
+                    configureTerminator(app.a, "CR/LF");
+
+                end
+                 if mod(app.a.UserData.Order,500)==0
+                     configureCallback(app.a, "off");
+
+                     app.Y = fft(app.a.UserData.ffData(end-499+1:end));
+                     app.P2 = abs(app.Y / 500); % Use 400 for normalization
+                     app.f = app.fs * (0:(length(app.Y)/2))/length(app.Y); % Adjust frequency axis
+                     app.P1 = app.P2(1:length(app.Y)/2+1);
+                     app.P1(2:end-1) = 2 * app.P1(2:end-1);
+                     plot(app.UIAxes_3,app.f,app.P1,'Color','r');
+                     set(gca,'ylim',[0,10]);
+
+                     app.Y1 = fft(app.a.UserData.fData(end-499+1:end));
+                     app.P3 = abs(app.Y1 / 500); % Use 400 for normalization
+                     app.f1 = app.fs * (0:(length(app.Y1)/2))/length(app.Y1); % Adjust frequency axis
+                     app.P4 = app.P3(1:length(app.Y1)/2+1);
+                     app.P4(2:end-1) = 2 * app.P4(2:end-1);
+                     plot(app.UIAxes_4, app.f1,app.P4,'Color','r');
+                     set(gca,'ylim',[0,15]);
+
+                     grid on;
+                     app.m=app.m+500;
+                     configureTerminator(app.a,"CR/LF");
+                 end
+                   if length(app.a.UserData.Data) >= 890 % Yeterli veri birikmiş mi kontrol et
+                % --- Kalp Atışı (BPM) Hesaplama ---
+                % Zaman damgası
+                timeAtPointBPM = toc; % Geçen zamanı ölç
+            
+                % Voltaj aralığına göre tepe noktalarını bul
+                validPeaks = app.a.UserData.Data(end-889:end); % Son 890 veri
+                peakCount = sum(validPeaks > 0.5 & validPeaks < 1.7); % 0.5-1.7 volt aralığında olan değerleri say
+            
+                % BPM hesaplama
+                if peakCount > 0 && timeAtPointBPM > 0
+                     app.bpm = (peakCount/ timeAtPointBPM)/150; % BPM hesaplama
+                    disp(['BPM: ', num2str(int16(app.bpm))]); % Konsola yazdır
+                    app.LableLabel.Text = num2str(int16(app.bpm)); % BPM etiketi güncelle
+                    tic; % Zamanlayıcıyı sıfırla
+                else
+                    % Eğer yeterli tepe yoksa önceki BPM değerini koru
+                    disp(['No new valid peaks detected. Retaining previous BPM: ', num2str(int16(app.bpm))]);
+                    app.LableLabel.Text = num2str(int16(app.bpm));
+                end
+            
+                % --- Nefes Alış-Veriş (RPM) Hesaplama ---
+                % FFT ile frekans analizi
+                fftData = fft(app.a.UserData.Data(end-889:end)); % Son 890 veri üzerinden FFT
+                fftMagnitude = abs(fftData / length(fftData)); % FFT genlik spektrumu
+                fftMagnitude = fftMagnitude(1:floor(length(fftData)/2)); % Pozitif frekanslar
+                frequencyAxis = app.fs * (0:(length(fftMagnitude)-1)) / length(fftData); % Frekans ekseni
+            
+                % Genlik threshold kontrolü
+                fftThreshold = 1; % FFT için daha düşük bir threshold değeri
+                validIndices = fftMagnitude > fftThreshold; % Genlik threshold'unu geçen frekansları bul
+                if any(validIndices)
+                    % Dominant frekansı bul
+                    [~, dominantIndex] = max(fftMagnitude(validIndices)); % Maksimum genlik indeksini bul
+                    dominantFrequencies = frequencyAxis(validIndices); % Threshold sonrası frekans ekseni
+                    dominantFrequency = dominantFrequencies(dominantIndex); % Dominant frekansı al
+            
+                    % RPM hesapla
+                    app.rpm = dominantFrequency /110; % Hz'yi RPM'e çevir
+                    disp(['RPM: ', num2str(int16(app.rpm))]); % Konsola yazdır
+                    app.Label2.Text = num2str(int16(app.rpm)); % RPM etiketi güncelle
+                else
+                    % Eğer threshold'u geçen frekans yoksa önceki RPM'i koru
+                    disp(['No significant frequency detected. Retaining previous RPM: ', num2str(int16(app.rpm))]);
+                    app.Label2.Text = num2str(int16(app.rpm));
+                end
+             end
+end
+            
+        end
+
+        % Button pushed function: StopButton
+        function StopButtonPushed(app, event)
+            app.IsRunning=false;
+            delete(app.a);
+        end
+
+        % Value changed function: LowpassfcEditField
+        function LowpassfcEditFieldValueChanged(app, event)
+            b=app.LowpassfcEditField.Value;
+            app.fc2=b;
+        end
+
+        % Value changed function: HighpassfcEditField
+        function HighpassfcEditFieldValueChanged(app, event)
+             c= app.HighpassfcEditField.Value;
+             app.fc1=c;
+        end
+
+        % Value changed function: EditOrderEditField
+        function EditOrderEditFieldValueChanged(app, event)
+            j = app.EditOrderEditField.Value;
+            app.orderOfFilter=j;
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        % Create UIFigure and components
+        function createComponents(app)
+
+            % Create UIFigure and hide until all components are created
+            app.UIFigure = uifigure('Visible', 'off');
+            app.UIFigure.Color = [0.9412 0.9412 0.9412];
+            app.UIFigure.Position = [100 100 692 533];
+            app.UIFigure.Name = 'MATLAB App';
+
+            % Create UIAxes
+            app.UIAxes = uiaxes(app.UIFigure);
+            title(app.UIAxes, 'Raw Signal')
+            xlabel(app.UIAxes, 'Time')
+            ylabel(app.UIAxes, 'Y')
+            zlabel(app.UIAxes, 'Z')
+            app.UIAxes.YLim = [-200 200];
+            app.UIAxes.Position = [24 228 300 174];
+
+            % Create UIAxes_2
+            app.UIAxes_2 = uiaxes(app.UIFigure);
+            title(app.UIAxes_2, 'Filtered Signal')
+            xlabel(app.UIAxes_2, 'Time')
+            ylabel(app.UIAxes_2, 'Y')
+            zlabel(app.UIAxes_2, 'Z')
+            app.UIAxes_2.YLim = [-25 25];
+            app.UIAxes_2.Position = [364 237 301 156];
+
+            % Create UIAxes_3
+            app.UIAxes_3 = uiaxes(app.UIFigure);
+            title(app.UIAxes_3, 'Raw Signal FFT')
+            xlabel(app.UIAxes_3, 'Frequency')
+            ylabel(app.UIAxes_3, 'Y')
+            zlabel(app.UIAxes_3, 'Z')
+            app.UIAxes_3.Position = [24 44 300 155];
+
+            % Create UIAxes_4
+            app.UIAxes_4 = uiaxes(app.UIFigure);
+            title(app.UIAxes_4, 'Filtered Signal FFT')
+            xlabel(app.UIAxes_4, 'Frequency')
+            ylabel(app.UIAxes_4, 'Y')
+            zlabel(app.UIAxes_4, 'Z')
+            app.UIAxes_4.Position = [377 44 288 155];
+
+            % Create StartButton
+            app.StartButton = uibutton(app.UIFigure, 'push');
+            app.StartButton.ButtonPushedFcn = createCallbackFcn(app, @StartButtonPushed, true);
+            app.StartButton.BackgroundColor = [0 1 0];
+            app.StartButton.FontWeight = 'bold';
+            app.StartButton.Position = [24 503 100 22];
+            app.StartButton.Text = 'Start';
+
+            % Create StopButton
+            app.StopButton = uibutton(app.UIFigure, 'push');
+            app.StopButton.ButtonPushedFcn = createCallbackFcn(app, @StopButtonPushed, true);
+            app.StopButton.BackgroundColor = [1 0 0];
+            app.StopButton.FontWeight = 'bold';
+            app.StopButton.Position = [24 471 100 22];
+            app.StopButton.Text = 'Stop';
+
+            % Create HighpassfcEditFieldLabel
+            app.HighpassfcEditFieldLabel = uilabel(app.UIFigure);
+            app.HighpassfcEditFieldLabel.HorizontalAlignment = 'right';
+            app.HighpassfcEditFieldLabel.FontWeight = 'bold';
+            app.HighpassfcEditFieldLabel.Position = [425 471 77 22];
+            app.HighpassfcEditFieldLabel.Text = 'High pass fc';
+
+            % Create HighpassfcEditField
+            app.HighpassfcEditField = uieditfield(app.UIFigure, 'numeric');
+            app.HighpassfcEditField.ValueChangedFcn = createCallbackFcn(app, @HighpassfcEditFieldValueChanged, true);
+            app.HighpassfcEditField.FontWeight = 'bold';
+            app.HighpassfcEditField.Position = [517 471 100 22];
+            app.HighpassfcEditField.Value = 30;
+
+            % Create LowpassfcEditFieldLabel
+            app.LowpassfcEditFieldLabel = uilabel(app.UIFigure);
+            app.LowpassfcEditFieldLabel.HorizontalAlignment = 'right';
+            app.LowpassfcEditFieldLabel.FontWeight = 'bold';
+            app.LowpassfcEditFieldLabel.Position = [428 503 74 22];
+            app.LowpassfcEditFieldLabel.Text = 'Low pass fc';
+
+            % Create LowpassfcEditField
+            app.LowpassfcEditField = uieditfield(app.UIFigure, 'numeric');
+            app.LowpassfcEditField.ValueChangedFcn = createCallbackFcn(app, @LowpassfcEditFieldValueChanged, true);
+            app.LowpassfcEditField.FontWeight = 'bold';
+            app.LowpassfcEditField.Position = [517 503 100 22];
+            app.LowpassfcEditField.Value = 300;
+
+            % Create EditOrderEditFieldLabel
+            app.EditOrderEditFieldLabel = uilabel(app.UIFigure);
+            app.EditOrderEditFieldLabel.HorizontalAlignment = 'right';
+            app.EditOrderEditFieldLabel.FontName = 'AvantGarde';
+            app.EditOrderEditFieldLabel.FontWeight = 'bold';
+            app.EditOrderEditFieldLabel.Position = [438 436 64 22];
+            app.EditOrderEditFieldLabel.Text = 'Edit Order';
+
+            % Create EditOrderEditField
+            app.EditOrderEditField = uieditfield(app.UIFigure, 'numeric');
+            app.EditOrderEditField.ValueChangedFcn = createCallbackFcn(app, @EditOrderEditFieldValueChanged, true);
+            app.EditOrderEditField.Position = [517 436 100 22];
+            app.EditOrderEditField.Value = 4;
+
+            % Create LableLabel
+            app.LableLabel = uilabel(app.UIFigure);
+            app.LableLabel.FontName = 'AvantGarde';
+            app.LableLabel.FontWeight = 'bold';
+            app.LableLabel.Position = [323 471 55 22];
+            app.LableLabel.Text = 'Lable';
+
+            % Create BPMLabel
+            app.BPMLabel = uilabel(app.UIFigure);
+            app.BPMLabel.Position = [279 471 31 22];
+            app.BPMLabel.Text = 'BPM';
+
+            % Create RPMLabel
+            app.RPMLabel = uilabel(app.UIFigure);
+            app.RPMLabel.Position = [280 436 32 22];
+            app.RPMLabel.Text = 'RPM';
+
+            % Create Label2
+            app.Label2 = uilabel(app.UIFigure);
+            app.Label2.FontName = 'AvantGarde';
+            app.Label2.FontWeight = 'bold';
+            app.Label2.Position = [320 436 58 22];
+            app.Label2.Text = 'Label2';
+
+            % Show the figure after all components are created
+            app.UIFigure.Visible = 'on';
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        % Construct app
+        function app = Saidthat
+
+            % Create UIFigure and components
+            createComponents(app)
+
+            % Register the app with App Designer
+            registerApp(app, app.UIFigure)
+
+            % Execute the startup function
+            runStartupFcn(app, @startupFcn)
+
+            if nargout == 0
+                clear app
+            end
+        end
+
+        % Code that executes before app deletion
+        function delete(app)
+
+            % Delete UIFigure when app is deleted
+            delete(app.UIFigure)
+        end
+    end
+end
